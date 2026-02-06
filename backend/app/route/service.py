@@ -1,5 +1,3 @@
-# backend/app/route/service.py
-
 import math
 from typing import List, Dict, Tuple
 from collections import defaultdict
@@ -139,21 +137,28 @@ def calculate_stats_for_route(
         .all()
     )
 
+    print(f"📊 [통계 재계산] 조회된 장애물: {len(obstacles)}개")
+    print(f"📊 [통계 재계산] 경로 좌표 수: {len(route_coords)}개")
+    print(f"📊 [통계 재계산] 반경: {radius_m}m")
+
     # 통계 계산
     type_total = defaultdict(int)
     type_failed = defaultdict(int)
     type_success = defaultdict(int)
+    failed_obstacles = []  # 디버깅용
 
     for obs in obstacles:
         obs_type = obs.type
         type_total[obs_type] += 1
         hit = False
+        min_dist = float('inf')
 
         # 경로 위 좌표들 중 반경 내에 들어오는지 확인
         # 노드뿐만 아니라 노드 사이의 경로(edge)도 고려
         for i in range(len(route_coords)):
             route_lat, route_lng = route_coords[i]
             d = haversine_m(route_lat, route_lng, obs.lat, obs.lng)
+            min_dist = min(min_dist, d)
             if d <= radius_m:
                 hit = True
                 break
@@ -167,6 +172,7 @@ def calculate_stats_for_route(
                     mid_lat = route_lat + (next_lat - route_lat) * (j / 4.0)
                     mid_lng = route_lng + (next_lng - route_lng) * (j / 4.0)
                     d_mid = haversine_m(mid_lat, mid_lng, obs.lat, obs.lng)
+                    min_dist = min(min_dist, d_mid)
                     if d_mid <= radius_m:
                         hit = True
                         break
@@ -175,6 +181,13 @@ def calculate_stats_for_route(
 
         if hit:
             type_failed[obs_type] += 1
+            failed_obstacles.append({
+                "id": obs.id,  # 중복 확인을 위해 ID 추가
+                "type": obs_type,
+                "lat": obs.lat,
+                "lng": obs.lng,
+                "distance": min_dist
+            })
         else:
             type_success[obs_type] += 1
 
@@ -187,6 +200,15 @@ def calculate_stats_for_route(
             "failed": type_failed[t],
         }
 
+    if failed_obstacles:
+        print(f"⚠️  [통계 재계산] 회피 실패한 장애물 {len(failed_obstacles)}개:")
+        for obs in failed_obstacles[:5]:  # 처음 5개만 출력
+            print(f"   - {obs['type']} (ID: {obs['id']}): ({obs['lat']:.6f}, {obs['lng']:.6f}), 최소거리: {obs['distance']:.2f}m")
+        if len(failed_obstacles) > 5:
+            print(f"   ... 외 {len(failed_obstacles) - 5}개")
+    else:
+        print(f"✅ [통계 재계산] 모든 장애물 회피 성공!")
+
     return obstacle_stats
 
 
@@ -195,7 +217,14 @@ def find_best_path(req, db, user_id):
     current_avoid = list(req.avoid_types)
     original_avoid_types = list(req.avoid_types)  # 원래 선택한 타입 저장
 
+    print(f"\n🚀 [경로 찾기 시작] 시작: ({req.start_lat}, {req.start_lng}), 끝: ({req.end_lat}, {req.end_lng})")
+    print(f"🚀 [경로 찾기] 회피 대상 타입: {original_avoid_types}")
+    print(f"🚀 [경로 찾기] 반경: {req.radius_m}m, 패널티: {req.penalties}")
+
+    iteration = 0
     while True:
+        iteration += 1
+        print(f"\n--- 반복 {iteration} ---")
         # 1) 경로 계산
         res = astar_path_with_penalty(
             start=(req.start_lat, req.start_lng),

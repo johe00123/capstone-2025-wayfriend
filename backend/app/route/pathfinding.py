@@ -206,28 +206,48 @@ def astar_path_with_penalty(
     unavoidable_list: List[Dict[str, float | str]] = []
 
     if avoid_types and obs_list:
+        # 경로 좌표 리스트 생성 (노드 기반)
+        route_coords_for_check: List[Tuple[float, float]] = [
+            (G.nodes[n]["y"], G.nodes[n]["x"]) for n in path_nodes
+        ]
+
         for obs_lat, obs_lng, obs_type in obs_list:
             type_total[obs_type] += 1
             hit = False
 
-            # 경로 위 노드들 중 반경 내에 들어오는지 확인
-            for n in path_nodes:
-                node_lat = G.nodes[n]["y"]
-                node_lng = G.nodes[n]["x"]
-                d = haversine_m(node_lat, node_lng, obs_lat, obs_lng)
+            # 경로 위 좌표들 중 반경 내에 들어오는지 확인
+            # 노드뿐만 아니라 노드 사이의 경로(edge)도 고려
+            for i in range(len(route_coords_for_check)):
+                route_lat, route_lng = route_coords_for_check[i]
+                d = haversine_m(route_lat, route_lng, obs_lat, obs_lng)
                 if d <= radius_m:
                     hit = True
-                    unavoidable_list.append(
-                        {
-                            "type": obs_type,
-                            "lat": obs_lat,
-                            "lng": obs_lng,
-                        }
-                    )
                     break
 
+                # 다음 노드와의 세그먼트도 확인 (노드 사이 경로를 놓치지 않기 위해)
+                if i < len(route_coords_for_check) - 1:
+                    next_lat, next_lng = route_coords_for_check[i + 1]
+                    # 세그먼트의 최단 거리 근사: 두 노드 사이의 중간점들도 체크
+                    for j in range(1, 4):  # 3개의 중간점 체크
+                        mid_lat = route_lat + (next_lat - route_lat) * (j / 4.0)
+                        mid_lng = route_lng + (next_lng - route_lng) * (j / 4.0)
+                        d_mid = haversine_m(mid_lat, mid_lng, obs_lat, obs_lng)
+                        if d_mid <= radius_m:
+                            hit = True
+                            break
+                    if hit:
+                        break
+
+            # hit된 경우에만 unavoidable_list에 추가 (중복 방지)
             if hit:
                 type_failed[obs_type] += 1
+                unavoidable_list.append(
+                    {
+                        "type": obs_type,
+                        "lat": obs_lat,
+                        "lng": obs_lng,
+                    }
+                )
             else:
                 type_success[obs_type] += 1
 
